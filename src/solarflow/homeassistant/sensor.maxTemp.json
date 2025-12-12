@@ -5,6 +5,7 @@
     "uniq_id": "{{ device_id }}-{{ battery_serial }}-maxTemp",
     "unit_of_meas": "°C",
     "dev_cla": "temperature",
+    "stat_cla": "measurement",
     "dev": {
       "identifiers": ["{{ device_id }}"],
       "manufacturer": "Zendure",
