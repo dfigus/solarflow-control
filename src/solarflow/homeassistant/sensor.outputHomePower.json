@@ -3,6 +3,7 @@
     "stat_t": "~outputHomePower",
     "uniq_id": "{{ device_id }}-outputHomePower",
     "dev_cla": "power",
+    "stat_cla": "measurement",
     "unit_of_meas": "W",
     "dev": {
       "identifiers": ["{{ device_id }}"],
