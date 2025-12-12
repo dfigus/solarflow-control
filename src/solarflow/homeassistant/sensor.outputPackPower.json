@@ -3,6 +3,7 @@
     "stat_t": "~outputPackPower",
     "uniq_id": "{{ device_id }}-outputPackPower",
     "dev_cla": "power",
+    "stat_cla": "measurement",
     "unit_of_meas": "W",
     "dev": {
       "identifiers": ["{{ device_id }}"],

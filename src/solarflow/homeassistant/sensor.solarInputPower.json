@@ -3,6 +3,7 @@
     "stat_t": "~solarInputPower",
     "uniq_id": "{{ device_id }}-solarInputPower",
     "dev_cla": "power",
+    "stat_cla": "measurement",
     "unit_of_meas": "W",
     "dev": {
       "identifiers": ["{{ device_id }}"],
