@@ -89,7 +89,11 @@ class Smartmeter:
 
     def handleMsg(self, msg):
         if msg.topic.startswith(self.base_topic) and msg.payload:
-            payload = json.loads(msg.payload.decode())
+            try:
+                payload = json.loads(msg.payload.decode())
+            except json.JSONDecodeError as e:
+                log.error(f'Could not parse JSON from topic {msg.topic}: {e}')
+                return
 
             if type(payload) is float or type(payload) is int:
                 self.phase_values.update({msg.topic:payload * self.scaling_factor})
