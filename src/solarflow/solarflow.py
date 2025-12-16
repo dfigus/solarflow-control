@@ -384,7 +384,11 @@ class Solarflow:
         # transform the original messages sent by the SF hub into a better readable format
         if self.productId in msg.topic:
             device_id = msg.topic.split('/')[2]
-            payload = json.loads(msg.payload.decode())
+            try:
+                payload = json.loads(msg.payload.decode())
+            except json.JSONDecodeError as e:
+                log.error(f'Could not parse JSON from topic {msg.topic}: {e}')
+                return
             if "properties" in payload:
                 props = payload["properties"]
                 for prop, val in props.items():
