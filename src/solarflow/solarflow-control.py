@@ -496,27 +496,18 @@ def limit_callback(client: mqtt_client, force=False):
     
     if force:
         # Handle force updates (rapid changes detected) with throttling
-        if last_force_trigger_time is None:
-            # First force ever, execute immediately
+        elapsed_since_force = (now - last_force_trigger_time).total_seconds()
+        if last_force_trigger_time is None or elapsed_since_force >= MIN_FORCE_INTERVAL:
             last_force_trigger_time = now
-            lastTriggerTS = now  # Also update steering interval timer
+            lastTriggerTS = now
             limitHomeInput(client)
-            log.info('Force update executed (first rapid change)')
+            log.info(f'Force update executed (elapsed {elapsed_since_force:.1f}s since last)')
             return True
         else:
-            elapsed_since_force = (now - last_force_trigger_time).total_seconds()
-            if elapsed_since_force >= MIN_FORCE_INTERVAL:
-                # Enough time since last force, execute this update
-                last_force_trigger_time = now
-                lastTriggerTS = now
-                limitHomeInput(client)
-                log.info(f'Force update executed (elapsed {elapsed_since_force:.1f}s since last)')
-                return True
-            else:
-                # Too soon, throttle this force
-                wait_time = MIN_FORCE_INTERVAL - elapsed_since_force
-                log.debug(f'Force update throttled (rapid changes detected, wait {wait_time:.1f}s until next allowed)')
-                return False
+            # Too soon, throttle this force
+            wait_time = MIN_FORCE_INTERVAL - elapsed_since_force
+            log.debug(f'Force update throttled (rapid changes detected, wait {wait_time:.1f}s until next allowed)')
+            return False
     else:
         # Normal steering interval logic
         if lastTriggerTS:
