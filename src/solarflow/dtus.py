@@ -43,7 +43,6 @@ class DTU:
         self.trigger_callback = callback
         self.last_trigger_value = 0
         self.efficiency = 95.0
-        self.acUpdateTS = datetime.min
         self.lastLimitTimestamp = datetime.min
     
     def __str__(self):
@@ -68,7 +67,6 @@ class DTU:
             self.channelsDCPower.append(value)
         if len(self.channelsDCPower) > channel:
             if channel == 0:
-                self.acUpdateTS = datetime.now()
                 self.acPower.add(value)
             self.channelsDCPower[channel] = value
 
@@ -202,10 +200,6 @@ class DTU:
             return int((self.acLimit/self.getNrDirectChannels()) * self.getNrTotalChannels())
         else:
             return int((self.acLimit/self.getNrProducingChannels()) * self.getNrTotalChannels())
-    
-    def hasPendingUpdate(self) -> bool:
-        log.info(f'Pending Update: {self.lastLimitTimestamp > self.acUpdateTS} - Last limit update: {self.lastLimitTimestamp}, AC update: {self.acUpdateTS}')
-        return self.lastLimitTimestamp > self.acUpdateTS
 
     def setLimit(self, limit:int):
         # failsafe, never set the inverter limit to 0, keep a minimum

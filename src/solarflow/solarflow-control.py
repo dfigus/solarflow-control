@@ -108,6 +108,10 @@ location: LocationInfo
 
 lastTriggerTS:datetime = None
 
+# Force update throttling for rapid changes
+last_force_trigger_time: datetime = None
+MIN_FORCE_INTERVAL = None
+
 class MyLocation:
     def getCoordinates(self) -> tuple:
         lat = lon = 0.0
@@ -127,7 +131,7 @@ class MyLocation:
 def on_config_message(client, userdata, msg):
     '''The MQTT client callback function for intial connects - mainly retained messages, where we are not yet fully up and running but still read potential config parameters from MQTT'''
 
-    global SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, DISCHARGE_DURING_DAYTIME,BATTERY_LOW,BATTERY_HIGH
+    global SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, DISCHARGE_DURING_DAYTIME,BATTERY_LOW,BATTERY_HIGH,MIN_FORCE_INTERVAL
     # handle own messages (control parameters)
     if msg.topic.startswith('solarflow-hub') and "control" in msg.topic and msg.payload:
         parameter = msg.topic.split('/')[-1]
@@ -154,11 +158,14 @@ def on_config_message(client, userdata, msg):
             case "batteryTargetSoCMax":
                 BATTERY_HIGH = int(value)
                 log.info(f'Found control/batteryTargetSoCMax, set BATTERY_HIGH to {BATTERY_HIGH}%')
+            case "minForceInterval":
+                MIN_FORCE_INTERVAL = int(value)
+                log.info(f'Found control/minForceInterval, set MIN_FORCE_INTERVAL to {MIN_FORCE_INTERVAL} seconds')
     
 
 def on_message(client, userdata, msg):
     '''The MQTT client callback function for continous oepration, messages are delegated to hub, dtu and smartmeter handlers as well as own control parameter updates'''
-    global SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, DISCHARGE_DURING_DAYTIME,BATTERY_LOW,BATTERY_HIGH
+    global SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, DISCHARGE_DURING_DAYTIME,BATTERY_LOW,BATTERY_HIGH,MIN_FORCE_INTERVAL
     #delegate message handling to hub,smartmeter, dtu
     smartmeter = userdata["smartmeter"]
     smartmeter.handleMsg(msg)
@@ -201,6 +208,9 @@ def on_message(client, userdata, msg):
                 log.info(f'Updating BATTERY_HIGH to {int(value)}%') if BATTERY_HIGH != int(value) else None
                 BATTERY_HIGH = int(value)
                 hub.updBatteryTargetSoCMax(BATTERY_HIGH)
+            case "minForceInterval":
+                log.info(f'Updating MIN_FORCE_INTERVAL to {int(value)} seconds') if MIN_FORCE_INTERVAL != int(value) else None
+                MIN_FORCE_INTERVAL = int(value)
         
 
 def on_connect(client, userdata, flags, rc):
@@ -480,35 +490,53 @@ def getOpts(configtype) -> dict:
             log.info(f'No config setting found for option "{opt}" in section {configtype.__name__.lower()}!')
     return opts
 
-def limit_callback(client: mqtt_client,force=False):
-    global lastTriggerTS
-    dtu = client._userdata['dtu']
-    #log.info("Smartmeter Callback!")
+def limit_callback(client: mqtt_client, force=False):
+    global lastTriggerTS, last_force_trigger_time, MIN_FORCE_INTERVAL
     now = datetime.now()
-    if lastTriggerTS:
-        elapsed = now - lastTriggerTS
-        # ensure the limit function is not called too often (avoid flooding DTUs)
-        if elapsed.total_seconds() >= steering_interval or force:
-            if force and dtu.hasPendingUpdate():
-                log.info(f'Force update blocked due to pending DTU update!')
-                return False  
-            
+    
+    if force:
+        # Handle force updates (rapid changes detected) with throttling
+        if last_force_trigger_time is None:
+            # First force ever, execute immediately
+            last_force_trigger_time = now
+            lastTriggerTS = now  # Also update steering interval timer
+            limitHomeInput(client)
+            log.info('Force update executed (first rapid change)')
+            return True
+        else:
+            elapsed_since_force = (now - last_force_trigger_time).total_seconds()
+            if elapsed_since_force >= MIN_FORCE_INTERVAL:
+                # Enough time since last force, execute this update
+                last_force_trigger_time = now
+                lastTriggerTS = now
+                limitHomeInput(client)
+                log.info(f'Force update executed (elapsed {elapsed_since_force:.1f}s since last)')
+                return True
+            else:
+                # Too soon, throttle this force
+                wait_time = MIN_FORCE_INTERVAL - elapsed_since_force
+                log.debug(f'Force update throttled (rapid changes detected, wait {wait_time:.1f}s until next allowed)')
+                return False
+    else:
+        # Normal steering interval logic
+        if lastTriggerTS:
+            elapsed = now - lastTriggerTS
+            if elapsed.total_seconds() >= steering_interval:
+                lastTriggerTS = now
+                limitHomeInput(client)
+                return True
+            else:
+                return False
+        else:
             lastTriggerTS = now
             limitHomeInput(client)
             return True
-
-        else:
-            return False
-    else:
-        lastTriggerTS = now
-        limitHomeInput(client)
-        return True
 
 def deviceInfo(client:mqtt_client):
     limitHomeInput(client)
 
 def updateConfigParams(client):
-    global config, DISCHARGE_DURING_DAYTIME, SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, BATTERY_HIGH, BATTERY_LOW
+    global config, DISCHARGE_DURING_DAYTIME, SUNRISE_OFFSET, SUNSET_OFFSET, MIN_CHARGE_POWER, MAX_DISCHARGE_POWER, BATTERY_HIGH, BATTERY_LOW, MIN_FORCE_INTERVAL
 
     # only update if configparameters haven't been updated/read from MQTT
     if DISCHARGE_DURING_DAYTIME == None:
@@ -545,6 +573,11 @@ def updateConfigParams(client):
         BATTERY_HIGH = config.getint('control', 'battery_high', fallback=None) or int(os.environ.get('BATTERY_HIGH',98)) 
         log.info(f'Updating BATTERY_HIGH from config file to {BATTERY_HIGH}%')
         client.publish(f'solarflow-hub/{sf_device_id}/control/batteryTargetSoCMax',BATTERY_HIGH,retain=True)
+
+    if MIN_FORCE_INTERVAL == None:
+        MIN_FORCE_INTERVAL = config.getint('control', 'min_force_interval', fallback=None) or int(os.environ.get('MIN_FORCE_INTERVAL', 6))
+        log.info(f'Updating MIN_FORCE_INTERVAL from config file to {MIN_FORCE_INTERVAL} seconds')
+        client.publish(f'solarflow-hub/{sf_device_id}/control/minForceInterval',MIN_FORCE_INTERVAL,retain=True)
 
 
 
