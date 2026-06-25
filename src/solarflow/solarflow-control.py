@@ -496,8 +496,9 @@ def limit_callback(client: mqtt_client, force=False):
     
     if force:
         # Handle force updates (rapid changes detected) with throttling
-        elapsed_since_force = (now - last_force_trigger_time).total_seconds()
-        if last_force_trigger_time is None or elapsed_since_force >= MIN_FORCE_INTERVAL:
+        # If first force update, allow it immediately. Otherwise, check the elapsed time since the last force update and only allow if it exceeds the minimum interval.
+        elapsed_since_force = MIN_FORCE_INTERVAL if last_force_trigger_time is None else (now - last_force_trigger_time).total_seconds()
+        if elapsed_since_force >= MIN_FORCE_INTERVAL:
             last_force_trigger_time = now
             lastTriggerTS = now
             limitHomeInput(client)
