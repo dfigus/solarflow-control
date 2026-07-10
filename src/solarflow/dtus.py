@@ -43,8 +43,11 @@ class DTU:
         self.trigger_callback = callback
         self.last_trigger_value = 0
         self.efficiency = 95.0
+        self.acUpdateTS = datetime.min
         self.lastLimitTimestamp = datetime.min
-    
+        self.inverterFwVersion = "unknown"
+        self.powerDistributor = None
+
     def __str__(self):
         chPower = "|".join([f'{v:>3.1f}' for v in self.channelsDCPower][1:])
         return ' '.join(f'{yellow}INV: \
@@ -108,6 +111,34 @@ class DTU:
 
     def updReachable(self, value):
         self.reachable = bool(value)
+
+    def updFirmwareVersion(self, value):
+        version_int = int(value) if isinstance(value, (int, float)) else int(float(value))
+        major = version_int // 10000
+        minor = (version_int % 10000) // 1000
+        build = version_int % 1000
+        self.inverterFwVersion = f'{major}.{minor:02d}.{build:02d}'
+        log.info(f'Detected inverter firmware version: {self.inverterFwVersion}')
+        self.initializePowerDistributor()
+
+    def isNewFirmware(self) -> bool:
+        if self.inverterFwVersion == "unknown":
+            return False
+        try:
+            parts = self.inverterFwVersion.split('.')
+            major, minor, build = int(parts[0]), int(parts[1]), int(parts[2])
+            return (major, minor, build) >= (1, 1, 12)
+        except (IndexError, ValueError):
+            return False
+
+    def initializePowerDistributor(self):
+        if self.powerDistributor is not None:
+            return
+        if self.isNewFirmware():
+            self.powerDistributor = SmartDistributor(self)
+        else:
+            self.powerDistributor = StaticChannelDistributor(self)
+        log.info(f'Initialized {self.powerDistributor.__class__.__name__} for firmware {self.inverterFwVersion}')
 
     def handleMsg(self, msg):
         if msg.topic.startswith(f'solarflow-hub') and msg.topic and msg.payload:
@@ -206,9 +237,12 @@ class DTU:
         # see: https://github.com/lumapu/ahoy/issues/1079
         limit = 10 if limit < 10 else int(limit)
 
+        # Initialize power distributor if not yet done (waits for firmware detection)
+        if self.powerDistributor is None:
+            self.initializePowerDistributor()
+
         # make sure that the inverter limit (which is applied to all MPPTs output equally) matches globally for what we need
-        #inv_limit = limit*(1/(len(self.sf_inverter_channels)/(len(self.channelsDCPower)-1)))
-        inv_limit = limit*(len(self.channelsDCPower)-1)
+        inv_limit = self.powerDistributor.distribute(limit)
 
         self.limitAbsoluteBuffer.add(inv_limit)
         # OpenDTU and AhoysDTU expect even limits?
@@ -263,7 +297,25 @@ class DTU:
             self.reachable and log.info(f'Not setting inverter output limit as it is identical to current limit!')
 
         return inv_limit
-    
+
+
+class DTUPowerDistributor:
+    def __init__(self, dtu):
+        self.dtu = dtu
+
+    def distribute(self, limit: int) -> int:
+        raise NotImplementedError("Subclasses must implement distribute()")
+
+
+class StaticChannelDistributor(DTUPowerDistributor):
+    def distribute(self, limit: int) -> int:
+        return limit * (len(self.dtu.channelsDCPower) - 1)
+
+
+class SmartDistributor(DTUPowerDistributor):
+    def distribute(self, limit: int) -> int:
+        return limit * len(self.dtu.sf_inverter_channels)
+
 
 class OpenDTU(DTU):
     opts = {"base_topic":str ,"inverter_serial":str,"sf_inverter_channels":list}
@@ -284,7 +336,8 @@ class OpenDTU(DTU):
             f'{self.base_topic}/status/producing',
             f'{self.base_topic}/status/reachable',
             f'{self.base_topic}/status/limit_absolute',
-            f'{self.base_topic}/status/limit_relative'
+            f'{self.base_topic}/status/limit_relative',
+            f'{self.base_topic}/status/fwbuildversion'
         ]
         super().subscribe(topics)
 
@@ -309,9 +362,11 @@ class OpenDTU(DTU):
                 case "power":
                     channel = int(msg.topic.split('/')[-2])
                     self.updChannelPowerDC(channel, value)
+                case "fwbuildversion":
+                    self.updFirmwareVersion(int(value))
                 case _:
                     log.warning(f'Ignoring inverter metric: {metric}')
-        
+
         super().handleMsg(msg)
 
 class AhoyDTU(DTU):
@@ -333,6 +388,7 @@ class AhoyDTU(DTU):
             f'{self.base_topic}/{self.inverter_name}/ch0/P_AC',
             f'{self.base_topic}/{self.inverter_name}/ch0/active_PowerLimit',
             f'{self.base_topic}/{self.inverter_name}/ch0/Efficiency',
+            f'{self.base_topic}/{self.inverter_name}/ch0/FWVersion',
             f'{self.base_topic}/status'
         ]
         super().subscribe(topics)
@@ -358,6 +414,8 @@ class AhoyDTU(DTU):
                         self.updTotalPowerDC(value)
                     else:
                         self.updChannelPowerDC(channel, value)
+                case "FWVersion":
+                    self.updFirmwareVersion(int(value))
                 case _:
                     log.warning(f'Ignoring inverter metric: {metric}')
 
